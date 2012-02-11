@@ -1,31 +1,55 @@
 {-# LANGUAGE FlexibleContexts #-}
 
-module Reservoir where
+module Reservoir
+    (
+      reservoir
+    , addElem
+    , elems
+    ) where
 
-import Data.Array.MArray
+import Control.Monad (liftM, when)
+import Control.Monad.Primitive (PrimState)
 import Data.Array.IO
+import Data.Array.MArray
+import Data.IORef
 import System.Random.MWC
-import Control.Monad.Primitive (PrimMonad, PrimState)
 
-data Reservoir e = Reservoir { currentSize :: Int, maxSize :: Int, unRes :: IOUArray Int e, gen :: Gen (PrimState IO) }
+-- newtype ReservoirState e = ReservoirState (IOUArray Int e)
 
-newReservoir size = do
+type ReservoirState e = IOUArray Int e
+type ReservoirGenerator = Gen (PrimState IO)
+
+data ReservoirSize = ReservoirSize { current :: Int, limit :: Int } deriving (Eq, Show)
+data Reservoir e = Reservoir { size :: IORef (ReservoirSize), unRes :: ReservoirState e, gen :: ReservoirGenerator }
+
+getSize res = readIORef $ size res
+
+incrementReservoirSize res = res { current=(succ $ current res) }
+
+reservoirSize size = ReservoirSize 0 size
+
+elems res = do
+    es <- getElems $ unRes res
+    size <- current `liftM` (getSize res)
+    return $ take size es
+
+reservoir size = do
     arr <- newListArray (0, size - 1) []
     gen <- create
-    return $ Reservoir 0 size arr gen
+    size <- newIORef $ reservoirSize size
+    return $ Reservoir size arr gen
 
-addElem :: MArray IOUArray t IO => Reservoir t -> t -> IO (Reservoir t)
-addElem res e =
-    if' (current < limit) (insertAt res current e) (randomPos >>= \pos -> if' (pos < limit) (insertAt res pos e) (increment res))
+addElem res e = do
+    resSize <- getSize res
+    pos <- if' (current resSize < limit resSize) (return $ current resSize) (randomPos $ current resSize)
+    putStrLn $ "inserting at " ++ show pos
+    when (pos < limit resSize) (insertAt res pos e)
+    modifyIORef (size res) incrementReservoirSize
+    return ()
   where
-    current = currentSize res
-    limit = maxSize res
-    randomPos = uniformR (0, limit) (gen res)
+    randomPos limit = uniformR (0, limit) (gen res)
     insertAt res ix e = do
         writeArray (unRes res) ix e
-        increment res
-    increment res = do
-        return $ res { currentSize = (current + 1) }
 
 if' :: Bool -> a -> a -> a
 if' True  x _ = x
